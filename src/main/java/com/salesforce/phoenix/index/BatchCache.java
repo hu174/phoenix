@@ -36,6 +36,11 @@ import org.apache.hadoop.hbase.client.Mutation;
  */
 public class BatchCache {
 
+  public static final BatchCache INSTANCE = new BatchCache();
+
+  protected BatchCache() {
+  }
+
   /**
    * @param m
    * @return <tt>true</tt> if the mutation is part of a batch

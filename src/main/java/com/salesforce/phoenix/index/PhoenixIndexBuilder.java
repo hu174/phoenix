@@ -77,13 +77,11 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
 
   private static final Log LOG = LogFactory.getLog(PhoenixIndexBuilder.class);
   private static final String CODEC_INSTANCE_KEY = "com.salesforce.hbase.index.codec.class";
+  private static BatchCache batchCache = BatchCache.INSTANCE;
 
-  private IndexCodec codec;
-  private Map<byte[], Result> rowCache = new TreeMap<byte[], Result>(Bytes.BYTES_COMPARATOR);
   private RegionCoprocessorEnvironment env;
-
-  // TODO actually get this from the CP endpoint
-  private final BatchCache batchCache = new BatchCache();
+  private Map<byte[], Result> rowCache = new TreeMap<byte[], Result>(Bytes.BYTES_COMPARATOR);
+  private IndexCodec codec;
   private LocalTable localTable;
 
   @Override
@@ -351,5 +349,13 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
       Mutation m = op.getFirst();
       this.rowCache.remove(m.getRow());
     }
+  }
+
+  /**
+   * Exposed for testing!
+   * @param cache the {@link BatchCache} to use for this instance of the builder.
+   */
+  public static void setBatchCacheForTesting(BatchCache cache){
+    PhoenixIndexBuilder.batchCache = cache;
   }
 }
