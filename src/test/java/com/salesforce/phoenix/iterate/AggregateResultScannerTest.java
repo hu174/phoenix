@@ -48,10 +48,10 @@ import com.salesforce.phoenix.expression.aggregator.ClientAggregators;
 import com.salesforce.phoenix.expression.function.SingleAggregateFunction;
 import com.salesforce.phoenix.expression.function.SumAggregateFunction;
 import com.salesforce.phoenix.jdbc.PhoenixConnection;
-import com.salesforce.phoenix.query.BaseConnectionlessQueryTest;
 import com.salesforce.phoenix.schema.*;
 import com.salesforce.phoenix.schema.tuple.SingleKeyValueTuple;
 import com.salesforce.phoenix.schema.tuple.Tuple;
+import com.salesforce.phoenix.test.BaseConnectionlessQueryTest;
 import com.salesforce.phoenix.util.AssertResults;
 
 
