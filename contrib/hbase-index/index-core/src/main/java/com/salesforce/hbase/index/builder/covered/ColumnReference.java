@@ -66,4 +66,9 @@ public class ColumnReference implements Comparable<ColumnReference> {
   public int hashCode() {
     return Bytes.hashCode(family) + Bytes.hashCode(qualifier);
   }
+
+  @Override
+  public String toString() {
+    return "ColumnReference - " + Bytes.toString(family) + ":" + Bytes.toString(qualifier);
+  }
 }

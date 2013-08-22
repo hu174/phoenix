@@ -34,7 +34,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-import java.util.TreeMap;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -44,9 +43,7 @@ import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
-import org.apache.hadoop.hbase.regionserver.MiniBatchOperationInProgress;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Pair;
@@ -55,7 +52,6 @@ import com.google.common.collect.Ordering;
 import com.google.common.collect.TreeMultimap;
 import com.salesforce.hbase.index.builder.BaseIndexBuilder;
 import com.salesforce.hbase.index.builder.covered.ColumnTracker;
-import com.salesforce.hbase.index.builder.covered.CoveredColumnIndexer;
 import com.salesforce.hbase.index.builder.covered.IndexCodec;
 import com.salesforce.hbase.index.builder.covered.IndexUpdate;
 import com.salesforce.hbase.index.builder.covered.TableState;
@@ -66,9 +62,15 @@ import com.salesforce.hbase.index.builder.covered.TableState;
  * Before any call to prePut/preDelete, the row has already been locked. This ensures that we don't
  * need to do any extra synchronization in the IndexBuilder.
  * <p>
- * This is a very simple mechanism that doesn't do covered indexes (as in
- * {@link CoveredColumnIndexer}), but just serves as a starting point for implementing comprehensive
- * indexing in phoenix.
+ * <b>WARNING:</b> This builder does not correctly support adding the same row twice to a batch
+ * update. For instance, adding a {@link Put} of the same row twice with different values at
+ * different timestamps. In this case, the {@link TableState} will return the state of the table
+ * before the batch; the second Put would <i>not</i> see the earlier Put applied. The reason for
+ * this is that it is very hard to manage invalidating the local table state in case of failure and
+ * maintaining a row cache across a batch (see {@link LocalTable} for more information on why). The
+ * current implementation would manage the above case by possibly not realizing it needed to issue a
+ * cleanup delete for the index row, leading to an invalid index as one of the updates wouldn't be
+ * properly covered by a delete.
  * <p>
  * NOTE: This implementation doesn't cleanup the index when we remove a key-value on compaction or
  * flush, leading to a bloated index that needs to be cleaned up by a background process.
@@ -76,11 +78,9 @@ import com.salesforce.hbase.index.builder.covered.TableState;
 public class PhoenixIndexBuilder extends BaseIndexBuilder {
 
   private static final Log LOG = LogFactory.getLog(PhoenixIndexBuilder.class);
-  private static final String CODEC_INSTANCE_KEY = "com.salesforce.hbase.index.codec.class";
-  private static BatchCache batchCache = BatchCache.INSTANCE;
+  public static final String CODEC_CLASS_NAME_KEY = "com.salesforce.hbase.index.codec.class";
 
   private RegionCoprocessorEnvironment env;
-  private Map<byte[], Result> rowCache = new TreeMap<byte[], Result>(Bytes.BYTES_COMPARATOR);
   private IndexCodec codec;
   private LocalTable localTable;
 
@@ -91,7 +91,7 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
     // so we can use it later when generalizing covered indexes
     Configuration conf = env.getConfiguration();
     Class<? extends IndexCodec> codecClass =
-        conf.getClass(CODEC_INSTANCE_KEY, null, IndexCodec.class);
+        conf.getClass(CODEC_CLASS_NAME_KEY, null, IndexCodec.class);
     try {
       Constructor<? extends IndexCodec> meth = codecClass.getDeclaredConstructor(new Class[0]);
       meth.setAccessible(true);
@@ -100,7 +100,7 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
       throw new IOException(e);
     }
     
-    this.localTable = new LocalTable(env, rowCache, batchCache);
+    this.localTable = new LocalTable(env);
   }
 
   @Override
@@ -117,8 +117,6 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
       LOG.debug("Found index updates for Put: " + updateMap);
     }
 
-    // we have all the updates for this row, so we just need to update the row cache for this row
-    updateRowCache(p, state);
     return updateMap;
   }
 
@@ -138,19 +136,6 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
     // split the mutation into timestamp-based batches
     TreeMultimap<Long, KeyValue> batches = createTimestampBatchesFromFamilyMap(m);
 
-    // figure out the newest timestamp in the current row's state. We need to keep this around so we
-    // can correctly do cleanups in the index for 'back in time' puts. This is a bit heavyweight
-    // right now as we iterate all the current KVs once, just for this and then do a likely
-    // iteration for each row. This also invalidates all the lazy lookup work in LocalTable, but
-    // keeping it around for when we figure out a better interface for this.
-    long newestTs = 0;
-    for (KeyValue kv : state.getCurrentRowState().list()) {
-      long ts = kv.getTimestamp();
-      if (ts > newestTs) {
-        newestTs = ts;
-      }
-    }
-
     // go through each batch of keyvalues and build separate index entries for each
     for (Entry<Long, Collection<KeyValue>> batch : batches.asMap().entrySet()) {
       // update the table state to expose up to the batch's newest timestamp
@@ -161,7 +146,7 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
        * current batch) the next group will see that as the current state, which will can cause the
        * a delete and a put to be created for the next group.
        */
-      addMutationsForBatch(updateMap, batch, state, newestTs);
+      addMutationsForBatch(updateMap, batch, state);
     }
   }
 
@@ -204,7 +189,7 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
    * @param state local state to update and pass to the codec
    */
   private void addMutationsForBatch(Collection<Pair<Mutation, String>> updateMap,
-      Entry<Long, Collection<KeyValue>> batch, LocalTableState state, long newestTs) {
+      Entry<Long, Collection<KeyValue>> batch, LocalTableState state) {
     /*
      * Generally, the current update will be the most recent thing to be added. In that case, all we
      * need to is issue a delete for the previous index row (the state of the row, without the
@@ -232,14 +217,14 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
     Iterable<IndexUpdate> upserts = codec.getIndexUpserts(state);
     state.resetTrackedColumns();
     if (upserts != null) {
-      for (IndexUpdate p : upserts) {
+      for (IndexUpdate update : upserts) {
         // TODO replace this as just storing a byte[], to avoid all the String <-> byte[] swapping
         // HBase does
-        String table = Bytes.toString(p.getTableName());
-        Put put = p.getUpdate();
+        String table = Bytes.toString(update.getTableName());
+        Put put = update.getUpdate();
 
         // create a column tracker for this update to see if we know about it
-        ColumnTracker tracker = p.getIndexedColumns();
+        ColumnTracker tracker = update.getIndexedColumns();
         if (tracker != null) {
           // we have a latest ts for the tracker, so we need to potentially issue a delete for the
           // put as well
@@ -323,15 +308,7 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
     batchMutationAndAddUpdates(updateMap, state, d);
     }
 
-    // we have all the updates for this row, so we just need to update the row cache for this row
-    updateRowCache(d, state);
-
     return updateMap;
-  }
-
-  private void updateRowCache(Mutation m, LocalTableState state) {
-    Result r = state.getCurrentRowState();
-    this.rowCache.put(m.getRow(), r);
   }
 
   @Override
@@ -341,21 +318,11 @@ public class PhoenixIndexBuilder extends BaseIndexBuilder {
     return null;
   }
 
-  @Override
-  public void batchCompleted(MiniBatchOperationInProgress<Pair<Mutation, Integer>> miniBatchOp) {
-    // cleanup the row cache for each mutation
-    for (int i = 0; i < miniBatchOp.size(); i++) {
-      Pair<Mutation, Integer> op = miniBatchOp.getOperation(i);
-      Mutation m = op.getFirst();
-      this.rowCache.remove(m.getRow());
-    }
-  }
-
   /**
    * Exposed for testing!
-   * @param cache the {@link BatchCache} to use for this instance of the builder.
+   * @param codec codec to use for this instance of the builder
    */
-  public static void setBatchCacheForTesting(BatchCache cache){
-    PhoenixIndexBuilder.batchCache = cache;
+  public void setIndexCodecForTesting(IndexCodec codec) {
+    this.codec = codec;
   }
 }

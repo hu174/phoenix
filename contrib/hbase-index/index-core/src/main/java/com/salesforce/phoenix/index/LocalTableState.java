@@ -51,6 +51,7 @@ import org.apache.hadoop.hbase.regionserver.KeyValueScanner;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 
+import com.google.common.collect.Iterators;
 import com.salesforce.hbase.index.builder.covered.ColumnReference;
 import com.salesforce.hbase.index.builder.covered.ColumnTracker;
 import com.salesforce.hbase.index.builder.covered.TableState;
@@ -72,21 +73,25 @@ public class LocalTableState implements TableState {
   private LocalTable table;
   private Mutation update;
   private Set<ColumnTracker> trackedColumns = new HashSet<ColumnTracker>();
+  private boolean initialized;
 
   public LocalTableState(RegionCoprocessorEnvironment environment, LocalTable table, Mutation update) {
     this.env = environment;
     this.attributes = update.getAttributesMap();
     this.table = table;
     this.update = update;
+    this.memstore = new ExposedMemStore(this.env.getConfiguration(), KeyValue.COMPARATOR);
   }
 
   public void addUpdate(KeyValue ...kvs){
+    if(kvs == null) return;
     for (KeyValue kv : kvs) {
       this.memstore.add(kv);
     }
   }
 
   public void addUpdate(Collection<KeyValue> list) {
+    if (list == null) return;
     for (KeyValue kv : list) {
       this.memstore.add(kv);
     }
@@ -167,11 +172,24 @@ public class LocalTableState implements TableState {
   private Iterator<KeyValue> getFilteredIterator(Filter filters) {
     // create a scanner and wrap it as an iterator, meaning you can only go forward
     final FilteredKeyValueScanner kvScanner = new FilteredKeyValueScanner(filters, memstore);
+    // seek the scanner to initialize it
+    KeyValue start = KeyValue.createFirstOnRow(update.getRow());
+    try {
+      if (!kvScanner.seek(start)) {
+        return Iterators.emptyIterator();
+      }
+    } catch (IOException e) {
+      // This should never happen - everything should explode if so.
+      throw new RuntimeException(
+          "Failed to seek to first key from update on the memstore scanner!", e);
+    }
+
+    // we have some info in the scanner, so wrap it in an iterator and return.
     return new Iterator<KeyValue>() {
 
       @Override
       public boolean hasNext() {
-        return kvScanner.peek() == null;
+        return kvScanner.peek() != null;
       }
 
       @Override
@@ -208,10 +226,10 @@ public class LocalTableState implements TableState {
    */
   private synchronized void ensureLocalStateInitialized() throws IOException {
     // check the local memstore - is it initialized?
-    if (this.memstore == null) {
-      this.memstore = new ExposedMemStore(this.env.getConfiguration(), KeyValue.COMPARATOR);
+    if (!initialized){
       // add the current state of the row
       this.addUpdate(this.table.getCurrentRowState(update).list());
+      this.initialized = true;
     }
   }
 

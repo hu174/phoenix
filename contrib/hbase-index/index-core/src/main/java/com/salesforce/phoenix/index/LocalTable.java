@@ -28,10 +28,8 @@
 package com.salesforce.phoenix.index;
 
 import java.io.IOException;
-import java.util.Map;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.HTableInterface;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Result;
@@ -40,59 +38,35 @@ import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 
 /**
- * Lazy wrapper around the local HTable and a per-rowkey cache. Uses the row cache to minimize
- * lookups for a given row over the course of a given batch and lazy instantiation of the connection
- * the local HTable (for cases that don't even even need to access local table state).
+ * Wrapper around a lazily instantiated, local HTable.
+ * <p>
+ * Previously, we had used various row and batch caches. However, this ends up being very
+ * complicated when attempting manage updating and invalidating the cache with no real gain as any
+ * row accessed multiple times will likely be in HBase's block cache, invalidating any extra caching
+ * we are doing here. In the end, its simpler and about as efficient to just get the current state
+ * of the row from HBase and let HBase manage caching the row from disk on its own.
  */
 public class LocalTable {
-  private static final Log LOG = LogFactory.getLog(LocalTable.class);
 
   private volatile HTableInterface localTable;
   private RegionCoprocessorEnvironment env;
-  private Map<byte[], Result> rowCache;
-  private BatchCache batchCache;
 
-  public LocalTable(RegionCoprocessorEnvironment env, Map<byte[], Result> rowCache,
-      BatchCache batchCache) {
+  public LocalTable(RegionCoprocessorEnvironment env) {
     this.env = env;
-    this.rowCache = rowCache;
-    this.batchCache = batchCache;
   }
 
   /**
    * @param m mutation for which we should get the current table state
    * @return the full state of the given row. Includes all current versions (even if they are not
-   *         usually visible to the client (unless they are also doing a raw scan)).
+   *         usually visible to the client (unless they are also doing a raw scan)). Never returns a
+   *         <tt>null</tt> {@link Result} - instead, when there is not data for the row, returns a
+   *         {@link Result} with no stored {@link KeyValue}s.
    * @throws IOException if there is an issue reading the row
    */
   public Result getCurrentRowState(Mutation m) throws IOException {
-    // check to see if this put is the first in a batch
-    boolean matchesBatch = this.batchCache.matchesKnownBatch(m);
-    Result currentRow = null;
-    byte[] sourceRow = m.getRow();
-    if (matchesBatch) {
-      currentRow = rowCache.get(sourceRow);
-    }
-
-    // we haven't seen this row before, so look it up
-    if (currentRow == null) {
-      currentRow = getCurrentRow(sourceRow);
-      if (matchesBatch) {
-        // stick it back in the cache
-        this.rowCache.put(sourceRow, currentRow);
-      }
-    }
-
-    return currentRow;
-  }
-
-  /**
-   * @param sourceRow row key to extract
-   * @return the full state of the given row. Includes all current versions (even if they are not
-   *         usually visible to the client (unless they are also doing a raw scan)).
-   */
-  private Result getCurrentRow(byte[] sourceRow) throws IOException {
-    Scan s = new Scan(sourceRow, sourceRow);
+    byte[] row = m.getRow();
+    // need to use a scan here so we can get raw state, which Get doesn't provide.
+    Scan s = new Scan(row, row);
     s.setRaw(true);
     s.setMaxVersions();
     ResultScanner results = getLocalTable().getScanner(s);
@@ -100,7 +74,7 @@ public class LocalTable {
     assert results.next() == null : "Got more than one result when scanning"
         + " a single row in the primary table!";
     results.close();
-    return r;
+    return r == null ? new Result() : r;
   }
 
   /**

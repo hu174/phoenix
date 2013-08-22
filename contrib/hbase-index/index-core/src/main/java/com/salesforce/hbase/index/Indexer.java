@@ -247,4 +247,12 @@ public class Indexer extends BaseRegionObserver {
     return super.preCompactScannerOpen(c, store, scanners, scanType, earliestPutTs, s);
   }
 
+  /**
+   * Exposed for testing!
+   * @return the currently instantiated index buidler
+   */
+  public IndexBuilder getBuilderForTesting() {
+    return this.builder;
+  }
+
 }
