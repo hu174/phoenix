@@ -1,10 +1,12 @@
 package com.salesforce.phoenix.index;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.util.Pair;
 
 import com.salesforce.hbase.index.builder.covered.IndexCodec;
@@ -41,5 +43,10 @@ public class CoveredIndexCodecForTesting implements IndexCodec {
   @Override
   public Iterable<IndexUpdate> getIndexUpserts(TableState state) {
     return this.updates;
+  }
+
+  @Override
+  public void initialize(RegionCoprocessorEnvironment env) throws IOException {
+    // noop
   }
 }

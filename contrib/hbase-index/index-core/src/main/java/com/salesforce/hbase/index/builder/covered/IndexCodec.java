@@ -1,13 +1,23 @@
 package com.salesforce.hbase.index.builder.covered;
 
+import java.io.IOException;
+
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.util.Pair;
 
 /**
  * Codec for creating index updates from the current state of a table
  */
 public interface IndexCodec {
+
+  /**
+   * Do any code initialization necessary
+   * @param env environment in which the codec is operating
+   * @throws IOException if the codec cannot be initalized correctly
+   */
+  public void initialize(RegionCoprocessorEnvironment env) throws IOException;
 
   // JY: used for both batch case and covering delete case
   /**

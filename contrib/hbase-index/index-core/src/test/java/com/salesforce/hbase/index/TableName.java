@@ -15,53 +15,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.salesforce.hbase.index.builder.covered;
+// taken from https://issues.apache.org/jira/browse/HBASE-8740, HBASE-8740v2.patch
+package com.salesforce.hbase.index;
 
-import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.junit.rules.TestWatcher;
+import org.junit.runner.Description;
 
 /**
- *
+ * Returns a {@code byte[]} containing the name of the currently running test method.
  */
-public class IndexUpdate {
-  Put update;
-  byte[] tableName;
-  ColumnTracker columns;
+public class TableName extends TestWatcher {
+  private byte[] tableName;
 
-  IndexUpdate(ColumnTracker tracker) {
-    this.columns = tracker;
-  }
-
-  public void setUpdate(Put p) {
-    this.update = p;
-  }
-
-  public void setTable(byte[] tableName) {
-    this.tableName = tableName;
-  }
-
-  public Put getUpdate() {
-    return update;
+  /**
+   * Invoked when a test is about to start
+   */
+  @Override
+  protected void starting(Description description) {
+    tableName = Bytes.toBytes(description.getMethodName());
   }
 
   public byte[] getTableName() {
     return tableName;
-  }
-
-  public ColumnTracker getIndexedColumns() {
-    return columns;
-  }
-
-  @Override
-  public String toString() {
-    return "IndexUpdate: \n\ttable - " + Bytes.toString(tableName) + "\n\tupdate: " + update
-        + "\n\tcolumns: " + columns;
-  }
-
-  public static IndexUpdate createIndexUpdateForTesting(ColumnTracker tracker, byte[] table, Put p) {
-    IndexUpdate update = new IndexUpdate(tracker);
-    update.setTable(table);
-    update.setUpdate(p);
-    return update;
   }
 }

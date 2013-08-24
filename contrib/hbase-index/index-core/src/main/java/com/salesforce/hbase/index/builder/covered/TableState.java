@@ -1,18 +1,19 @@
 package com.salesforce.hbase.index.builder.covered;
 
 import java.io.IOException;
-import java.util.Iterator;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
-import org.apache.hadoop.hbase.regionserver.ColumnTracker;
 import org.apache.hadoop.hbase.util.Pair;
 
 /**
- * Interface for the current state of the table. This is generally going to be as of a timestamp - a view on the current state of the HBase table - so you don't have to worry about exposing too much information.
+ * Interface for the current state of the table. This is generally going to be as of a timestamp - a
+ * view on the current state of the HBase table - so you don't have to worry about exposing too much
+ * information.
  */
 public interface TableState {
 
@@ -41,13 +42,29 @@ public interface TableState {
   public Map<String, byte[]> getUpdateAttributes();
 
   // use this to get the cf:cq as of the current timestamp
-  public Iterator<KeyValue> getNonIndexedColumnsTableState(List<ColumnReference> columns)
+  public Scanner getNonIndexedColumnsTableState(List<? extends ColumnReference> columns)
       throws IOException;
 
   /**
-   * Get an iterator on the columns that will be indexed. This is similar to
+   * Get a scanner on the columns that will be indexed. This is similar to
    * {@link #getNonIndexedColumnsTableState(List)}, but should only be called for columns that you
    * need to index to ensure we can properly cleanup the index in the case of out of order updates.
+   * <p>
+   * The returned scanner is already pre-seeked to the first {@link KeyValue} that matches the given
+   * columns with a timestamp earlier than the timestamp to which the table is currently set (the
+   * current state of the table for which we need to build an update).
+   * <p>
+   * If none of the passed columns matches any of the columns in the pending update (as determined
+   * by {@link ColumnReference#matchesFamily(byte[])} and
+   * {@link ColumnReference#matchesQualifier(byte[])}, then an empty scanner will be returned. This
+   * is because it doesn't make sense to build index updates when there is no change in the table
+   * state for any of the columns you are indexing.
+   * <p>
+   * <i>NOTE:</i> This method should <b>not</b> be used during
+   * {@link IndexCodec#getIndexDeletes(TableState)} as the pending update will not yet have been
+   * applied - you are merely attempting to cleanup the current state and therefore do <i>not</i>
+   * need to track the indexed columns.
+   * <p>
    * As a side-effect, we update a timestamp for the next-most-recent timestamp for the columns you
    * request - you will never see a column with the timestamp we are tracking, but the next oldest
    * timestamp for that column.
@@ -57,10 +74,26 @@ public interface TableState {
    * to set them), then you don't need to use this method and can instead just use
    * {@link #getNonIndexedColumnsTableState(List)}.
    * @param indexedColumns the columns to that will be indexed
-   * @return an iterator over the columns and a general tracker for the {@link ColumnReference}s.
-   *         The reference should be passed back up as part of the {@link IndexUpdate}.
+   * @return an iterator over the columns and the {@link IndexUpdate} that should be passed back to
+   *         the builder. Even if no update is necessary for the requested columns, you still need
+   *         to return the {@link IndexUpdate}, just don't set the update for the
+   *         {@link IndexUpdate}.
    * @throws IOException
    */
-  Pair<Iterator<KeyValue>, com.salesforce.hbase.index.builder.covered.ColumnTracker>
-      getIndexedColumnsTableState(List<ColumnReference> indexedColumns) throws IOException;
+  Pair<Scanner, IndexUpdate> getIndexedColumnsTableState(
+      Collection<? extends ColumnReference> indexedColumns) throws IOException;
+
+  /**
+   * @return the row key for the current row for which we are building an index update.
+   */
+  byte[] getCurrentRowKey();
+
+  /**
+   * Get the 'hint' for the columns that were indexed last time for the same set of keyvalues.
+   * Generally, this will only be used when fixing up a 'back in time' put or delete as we need to
+   * fix up all the indexes that reference the changed columns.
+   * @return the hint the index columns that were queried on the last iteration for the changed
+   *         column
+   */
+  List<? extends IndexedColumnGroup> getIndexColumnHints();
 }

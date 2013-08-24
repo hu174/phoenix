@@ -36,7 +36,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -68,6 +67,7 @@ import com.salesforce.hbase.index.builder.covered.ColumnReference;
 import com.salesforce.hbase.index.builder.covered.ColumnTracker;
 import com.salesforce.hbase.index.builder.covered.IndexCodec;
 import com.salesforce.hbase.index.builder.covered.IndexUpdate;
+import com.salesforce.hbase.index.builder.covered.Scanner;
 import com.salesforce.hbase.index.builder.covered.TableState;
 
 /**
@@ -146,11 +146,11 @@ public class TestEndToEndPhoenixIndexBuilder {
     @Override
     public void verify(TableState state) {
       try {
-        Iterator<KeyValue> kvs = state.getNonIndexedColumnsTableState(Arrays.asList(columns));
+        Scanner kvs = state.getNonIndexedColumnsTableState(Arrays.asList(columns));
 
         int count = 0;
-        while (kvs.hasNext()) {
-          KeyValue kv = kvs.next();
+        KeyValue kv;
+        while ((kv = kvs.next()) != null) {
           assertEquals(msg + ": Unexpected kv in table state!", expectedKvs.get(count++), kv);
         }
 
@@ -319,7 +319,7 @@ public class TestEndToEndPhoenixIndexBuilder {
     // table, just for simplicity.
     ColumnReference familyRef = new ColumnReference(family, ColumnReference.ALL_QUALIFIERS);
     ColumnTracker tracker = new ColumnTracker(Arrays.asList(familyRef));
-    IndexUpdate update = new IndexUpdate(i, indexTableName, tracker);
+    IndexUpdate update = IndexUpdate.createIndexUpdateForTesting(tracker, indexTableName, i);
     state.codec.addIndexUpserts(update);
 
     // do the actual put
@@ -342,7 +342,7 @@ public class TestEndToEndPhoenixIndexBuilder {
 
     // this time we need to update the tracker so it has the timestamp of the previous row
     tracker.setTs(ts);
-    update = new IndexUpdate(i, indexTableName, tracker);
+    update = IndexUpdate.createIndexUpdateForTesting(tracker, indexTableName, i);
     // add the update to the codec
     state.codec.clear();
     state.codec.addIndexUpserts(update);

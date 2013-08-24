@@ -27,9 +27,8 @@
  ******************************************************************************/
 package com.salesforce.phoenix.index;
 
-import java.util.Map;
-
 import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.util.Pair;
 
 import com.salesforce.hbase.index.builder.covered.IndexCodec;
@@ -38,10 +37,15 @@ import com.salesforce.hbase.index.builder.covered.TableState;
 
 /**
  * Phoenix-basec {@link IndexCodec}. Manages all the logic of how to cleanup an index (
- * {@link #getIndexDeletes(Map, TableState)}) as well as what the new index state should be (
- * {@link #getIndexUpserts(Map, TableState)}).
+ * {@link #getIndexDeletes(TableState)}) as well as what the new index state should be (
+ * {@link #getIndexUpserts(TableState)}).
  */
 public class PhoenixIndexCodec implements IndexCodec {
+
+  @Override
+  public void initialize(RegionCoprocessorEnvironment env) {
+    // noop - all information necessary is in the given put/delete
+  }
 
   @Override
   public Iterable<Pair<Delete, byte[]>> getIndexDeletes(TableState state) {

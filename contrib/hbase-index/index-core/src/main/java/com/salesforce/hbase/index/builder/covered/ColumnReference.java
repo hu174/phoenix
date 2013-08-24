@@ -17,6 +17,9 @@
  */
 package com.salesforce.hbase.index.builder.covered;
 
+import java.util.Arrays;
+
+import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.util.Bytes;
 
 /**
@@ -39,6 +42,43 @@ public class ColumnReference implements Comparable<ColumnReference> {
 
   public byte[] getQualifier() {
     return this.qualifier;
+  }
+
+  /**
+   * @param qual to check against
+   * @return <tt>true</tt> if this column covers the given qualifier.
+   */
+  public boolean matchesQualifier(byte[] qual) {
+    return allColumns() ? true : match(qual, qualifier);
+  }
+
+  /**
+   * @param family to check against
+   * @return <tt>true</tt> if this column covers the given family.
+   */
+  public boolean matchesFamily(byte[] family) {
+    return match(family, this.family);
+  }
+
+  /**
+   * @return <tt>true</tt> if this should include all column qualifiers, <tt>false</tt> otherwise
+   */
+  public boolean allColumns() {
+    return this.qualifier == ALL_QUALIFIERS;
+  }
+
+  /**
+   * Check to see if the passed bytes match the stored bytes
+   * @param first
+   * @param storedKey the stored byte[], should never be <tt>null</tt>
+   * @return <tt>true</tt> if they are byte-equal
+   */
+  private boolean match(byte[] first, byte[] storedKey) {
+    return first == null ? false : Arrays.equals(first, storedKey);
+  }
+
+  public KeyValue getFirstKeyValueForRow(byte[] row) {
+    return KeyValue.createFirstOnRow(row, family, qualifier == ALL_QUALIFIERS ? null : qualifier);
   }
 
   @Override
